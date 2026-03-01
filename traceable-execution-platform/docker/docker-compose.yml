@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: traceable-postgres
+    environment:
+      POSTGRES_DB: traceable_db
+      POSTGRES_USER: traceable_user
+      POSTGRES_PASSWORD: traceable_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U traceable_user -d traceable_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: traceable-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: traceable-litellm
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    environment:
+      - LITELLM_MASTER_KEY=sk-master
+    command: [ "--config", "/app/config.yaml", "--port", "4000" ]
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: traceable-backend
+    ports:
+      - "8000:8000"
+
+    # 把根目录 .env 注入容器
+    env_file:
+      - ../.env
+
+    # 可选：只保留“想覆盖 .env 的”变量；否则可以整段删掉
+    environment:
+      - ARTIFACT_STORAGE_PATH=/app/data/artifacts
+      - AUDIT_LOG_PATH=/app/data/audit
+    volumes:
+      - ../backend:/app/backend
+      - ../scripts:/app/scripts
+      - ../script_specs:/app/script_specs
+      - artifact_data:/app/data/artifacts
+      - audit_data:/app/data/audit
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+        # TODO: 目前仅保证容器启动顺序，临时使用 service_started 。
+        # 后续应为 litellm 添加 healthcheck，
+        # 并将 condition 改为 service_healthy，
+        # 以避免启动竞态问题（如 backend 启动时 LiteLLM 端口尚未监听）。
+
+volumes:
+  postgres_data:
+  redis_data:
+  artifact_data:
+  audit_data:
